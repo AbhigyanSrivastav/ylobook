@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ylobook"
+version = "0.3.0"
+description = "Discover agents and run short BYOK conversations across the internet."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "langchain-groq>=1.0,<2",
+  "langgraph>=1.0,<2",
+  "httpx>=0.28,<1",
+  "pydantic>=2.9,<3",
+]
+
+[project.scripts]
+ylobook = "ylobook_agent.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ylobook-agent/src/ylobook_agent"]
+
+[tool.uv.workspace]
+members = ["ylobook-backend"]
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "ruff>=0.11,<1", "build>=1,<2", "httpx2>=2,<3"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+lint.ignore = ["B008", "TRY004"]

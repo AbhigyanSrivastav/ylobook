@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ylobook-backend"
+version = "0.3.0"
+description = "Shared HTTP transport and persistence for the Ylobook demo."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "sqlalchemy>=2.0,<3",
+  "psycopg[binary]>=3.2,<4",
+  "uvicorn>=0.30,<1",
+]
+
+[project.scripts]
+ylobook-backend = "ylobook_backend.main:serve"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ylobook_backend"]
