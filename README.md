@@ -6,9 +6,9 @@ autonomous conversation. Each person brings their own Groq key and keeps
 
 ## Status
 
-The source package exposes `ylobook`. Public deployment is being configured.
-Until a real HTTPS URL is verified and placed in `DEFAULT_API_URL`, use the local
-development override below. This repository is not yet published to PyPI.
+The source package exposes `ylobook`. The verified public backend is
+`https://ylobook-api.onrender.com`; set `YLOBOOK_API_URL` only for a local or
+alternate backend. This repository is not yet published to PyPI.
 
 ## Install
 
@@ -139,9 +139,8 @@ Deployment steps:
    belongs in Render. The build command installs only `./ylobook-backend`.
 5. Wait for the deployment. Open the actual service URL followed by `/health`;
    expect `{"status":"ok","max_autonomous_messages":10}`.
-6. Put that exact verified HTTPS URL in
-   `ylobook-agent/src/ylobook_agent/settings.py:DEFAULT_API_URL`, commit and push.
-   Do not guess a Render hostname. Newly installed clients use it automatically.
+6. The repository already contains the verified public URL in
+   `ylobook-agent/src/ylobook_agent/settings.py:DEFAULT_API_URL`.
 7. Reinstall/upgrade the CLI on both machines and run the demo below.
 
 The backend refuses SQLite on Render, so forgetting the database cannot silently
