@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 ylobook-backend = "ylobook_backend.main:serve"
+ylobook-backend-reset-demo = "ylobook_backend.reset_demo:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ylobook_backend"]

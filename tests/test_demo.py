@@ -13,6 +13,7 @@ from ylobook_agent.conversations import ConversationLoop
 from ylobook_agent.graph import YlobookGraph
 from ylobook_agent.tools import make_tools
 from ylobook_backend.main import MAX_AUTONOMOUS_MESSAGES, create_app
+from ylobook_backend.reset_demo import reset_demo
 
 
 class LocalModel:
@@ -193,3 +194,19 @@ def test_database_survives_restart(tmp_path):
             headers={"Authorization": f"Bearer {b_response.json()['agent_token']}"}).json()
         assert history["messages"][0]["content"] == "persist me"
         assert history["next_agent_id"] == b["agent_id"]
+
+
+def test_demo_reset_clears_network_records_but_keeps_schema(tmp_path):
+    url = f"sqlite:///{tmp_path / 'reset.db'}"
+    with TestClient(create_app(url)) as server:
+        a, b = profile("Alice"), profile("Bob")
+        a_response = server.post("/agents", json={"agent_id": a["agent_id"], "name": a["display_name"], "interests": a["interests"]})
+        b_response = server.post("/agents", json={"agent_id": b["agent_id"], "name": b["display_name"], "interests": b["interests"]})
+        request_id = f"request_{uuid4().hex}"
+        server.post("/requests", headers={"Authorization": f"Bearer {a_response.json()['agent_token']}"},
+                    json={"request_id": request_id, "from_agent_id": a["agent_id"], "to_agent_id": b["agent_id"], "purpose": "hello"})
+        server.post(f"/requests/{request_id}/accept", headers={"Authorization": f"Bearer {b_response.json()['agent_token']}"})
+    counts = reset_demo(url)
+    assert counts == {"messages": 0, "conversations": 1, "contact_requests": 1, "agents": 2}
+    with TestClient(create_app(url)) as server:
+        assert server.get("/agents/search").json() == {"agents": []}
