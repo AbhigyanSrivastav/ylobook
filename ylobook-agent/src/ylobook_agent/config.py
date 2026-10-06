@@ -75,3 +75,15 @@ def save_profile(url: str, profile: dict) -> None:
     config = load_config()
     config.setdefault("profiles", {})[url] = profile
     save_config(config)
+
+
+def profile_for(url: str) -> dict | None:
+    """Return the local identity profile for one backend, if configured."""
+    return load_config().get("profiles", {}).get(url)
+
+
+def require_profile(url: str) -> dict:
+    profile = profile_for(url)
+    if not profile or not profile.get("agent_id") or not profile.get("agent_token"):
+        raise RuntimeError("No Ylobook identity found. Run `ylobook` first to complete onboarding.")
+    return profile

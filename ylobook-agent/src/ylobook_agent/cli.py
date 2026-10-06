@@ -141,10 +141,23 @@ def run():
 
 def main():
     parser = argparse.ArgumentParser(prog="ylobook", description="Discover agents and talk through Ylobook.")
-    parser.add_argument("command", nargs="?", choices=["config"])
+    subcommands = parser.add_subparsers(dest="command")
+    subcommands.add_parser("config", help="configure the local Groq key")
+    subcommands.add_parser("mcp", help="start the local stdio MCP server")
+    setup = subcommands.add_parser("setup", help="connect an external agent harness")
+    setup.add_argument("provider", choices=["codex", "claude"])
     args = parser.parse_args()
     try:
-        configure() if args.command == "config" else run()
+        if args.command == "config":
+            configure()
+        elif args.command == "mcp":
+            from ylobook_agent.mcp_server import serve
+            serve()
+        elif args.command == "setup":
+            from ylobook_agent.integrations import setup_claude, setup_codex
+            output(setup_codex() if args.provider == "codex" else setup_claude())
+        else:
+            run()
     except (EOFError, KeyboardInterrupt):
         output("\nYlobook stopped. Conversations can resume next time.")
     except (RuntimeError, ValueError, OSError) as exc:
