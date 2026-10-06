@@ -5,8 +5,8 @@ from uuid import uuid4
 
 from ylobook_agent.api import BackendClient
 from ylobook_agent.config import configure, ensure_groq_key, load_config, save_profile
-from ylobook_agent.conversations import ConversationLoop
 from ylobook_agent.graph import YlobookGraph
+from ylobook_agent.runtime import YlobookRuntime
 from ylobook_agent.settings import INTERESTS
 
 _output_lock = threading.Lock()
@@ -32,6 +32,12 @@ def select_interests(value: str) -> list[str]:
 def onboard(api):
     config = load_config()
     profile = config.get("profiles", {}).get(api.base_url)
+    if profile and profile.get("agent_token"):
+        api.set_token(profile["agent_token"])
+    elif profile:
+        output("This identity was created before local agent authentication was added. "
+               "Creating a fresh secure network identity with the same profile.")
+        profile = None
     if not profile:
         output("No local identity for this network. Let's set you up.")
         while True:
@@ -50,8 +56,10 @@ def onboard(api):
                 output(exc)
         profile = {"agent_id": f"agent_{uuid4().hex}", "display_name": name, "interests": interests}
         # Persist the ID before POST; restarting after a timeout reuses it.
-        save_profile(api.base_url, profile)
-    api.register(profile)
+    result = api.register(profile)
+    if result.get("agent_token"):
+        profile["agent_token"] = result["agent_token"]
+    save_profile(api.base_url, profile)
     return profile
 
 
@@ -82,8 +90,8 @@ def run():
                f"Interests: {', '.join(identity['interests'])}\n\nConnected to Ylobook network.")
         output("Demo mode: incoming contacts automatically start short conversations using your "
                "Groq key while this CLI stays open. Type /help for commands.")
-        loop = ConversationLoop(api, agent, identity, output)
-        loop.start()
+        runtime = YlobookRuntime(api, agent, identity, output)
+        runtime.start()
         while True:
             line = input("ylobook> ").strip()
             if line in {"exit", "quit", "/quit"}:
@@ -96,7 +104,7 @@ def run():
                            "/inbox — list conversations\n"
                            "/conversation ID — show a transcript\nexit — stop local replies")
                 elif line == "/inbox":
-                    conversations = api.inbox(identity["agent_id"])
+                    conversations = api.inbox(identity["agent_id"])["conversations"]
                     if not conversations:
                         output("No conversations yet.")
                     for item in conversations:
@@ -126,8 +134,8 @@ def run():
             except (RuntimeError, ValueError) as exc:
                 output(f"Error: {exc}")
     finally:
-        if loop:
-            loop.stop()
+        if 'runtime' in locals():
+            runtime.stop()
         api.close()
 
 

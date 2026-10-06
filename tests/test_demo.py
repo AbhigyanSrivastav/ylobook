@@ -57,50 +57,56 @@ def profile(name):
 
 def test_two_agents_ten_messages_and_restart(network):
     api, _server, traffic = network
+    bob_api = BackendClient("http://testserver", transport=api.client._transport)
     alice, bob = profile("Alice"), profile("Bob")
     api.register(alice)
-    api.register(bob)
+    bob_api.register(bob)
     model_a, model_b = LocalModel(bob["agent_id"]), LocalModel(alice["agent_id"])
     a = YlobookGraph(api, alice, api_key="local-only-sentinel", llm=model_a)
     b = YlobookGraph(api, bob, api_key="another-local-only-sentinel", llm=model_b)
     assert [t.name for t in make_tools(api, alice)] == [
         "get_my_identity", "search_agents", "contact_agent"]
-    assert a.search("Find AI agents")["agents"] == [bob]
+    assert [item["agent_id"] for item in a.search("Find AI agents")["agents"]] == [bob["agent_id"]]
     contact = a.contact("What are you building?", bob["agent_id"])
-    cid = contact["conversation_id"]
-    la, lb = ConversationLoop(api, a, alice, lambda _: None), ConversationLoop(api, b, bob, lambda _: None)
-    la.tick()  # A speaks even when B has not yet started.
-    assert len(api.conversation(cid, alice["agent_id"])["messages"]) == 1
+    assert contact["contact_status"] == "pending"
+    la, lb = ConversationLoop(api, a, alice, lambda _: None), ConversationLoop(bob_api, b, bob, lambda _: None)
+    la.tick()  # No conversation exists until B's runtime accepts the request.
+    lb.tick()  # B accepts the durable request while A is offline.
+    cid = api.inbox(alice["agent_id"])["conversations"][0]["conversation_id"]
     la.tick()
-    assert model_a.calls == 1  # Offline B stalls the turn, not a self-loop.
+    assert len(api.conversation(cid, alice["agent_id"])["messages"]) == 1
     for _ in range(5):
         lb.tick()
         la.tick()
     history = api.conversation(cid, alice["agent_id"])
     assert len(history["messages"]) == MAX_AUTONOMOUS_MESSAGES
-    assert history["status"] == "complete"
+    assert history["status"] == "completed"
     assert [m["from_agent_id"] for m in history["messages"]] == [alice["agent_id"], bob["agent_id"]] * 5
     ConversationLoop(api, a, alice, lambda _: None).tick()
     assert model_a.calls == model_b.calls == 5
     with pytest.raises(BackendError) as error:
         api.post_message(cid, alice["agent_id"], "eleventh", 10)
     assert error.value.status == 409
-    assert all("authorization" not in headers for headers, _ in traffic)
+    assert any("authorization" in headers for headers, _ in traffic)
     assert "local-only-sentinel" not in str(traffic)
+    bob_api.close()
 
 
 def test_duplicate_posts_and_contacts(network):
     api, _, _ = network
+    bob_api = BackendClient("http://testserver", transport=api.client._transport)
     a, b = profile("Alice"), profile("Bob")
     api.register(a)
-    api.register(b)
+    bob_api.register(b)
     rid = f"request_{uuid4().hex}"
     contact = api.contact_agent(a["agent_id"], b["agent_id"], "hello", rid)
     duplicate = api.contact_agent(a["agent_id"], b["agent_id"], "hello", rid)
-    assert contact["conversation_id"] == duplicate["conversation_id"]
-    cid = contact["conversation_id"]
+    assert contact["contact_status"] == duplicate["contact_status"] == "pending"
+    cid = bob_api.accept_request(rid)["conversation_id"]
+    duplicate = api.contact_agent(a["agent_id"], b["agent_id"], "hello", rid)
+    assert duplicate["conversation_id"] == cid
     with pytest.raises(BackendError):
-        api.post_message(cid, b["agent_id"], "out of turn", 0)
+        bob_api.post_message(cid, b["agent_id"], "out of turn", 0)
     def send(_):
         try:
             api.post_message(cid, a["agent_id"], "hello", 0)
@@ -133,41 +139,57 @@ def test_config_onboarding_and_interest_validation(network, tmp_path, monkeypatc
 
 def test_invalid_payloads_and_member_check(network):
     api, server, _ = network
+    bob_api = BackendClient("http://testserver", transport=api.client._transport)
     a, b, outsider = profile("Alice"), profile("Bob"), profile("Outsider")
-    for item in (a, b, outsider):
-        api.register(item)
+    api.register(a)
+    bob_api.register(b)
+    outsider_api = BackendClient("http://testserver", transport=api.client._transport)
+    outsider_api.register(outsider)
     assert server.post("/agents", json={"agent_id": a["agent_id"], "name": " ", "interests": []}).status_code == 422
     assert server.post("/agents", json={"agent_id": a["agent_id"], "name": "Alice",
         "interests": ["AI Agents"], "groq_api_key": "must-not-be-stored"}).status_code == 422
-    cid = api.contact_agent(a["agent_id"], b["agent_id"], "hello", f"request_{uuid4().hex}")["conversation_id"]
+    request_id = f"request_{uuid4().hex}"
+    assert api.contact_agent(a["agent_id"], b["agent_id"], "hello", request_id)["contact_status"] == "pending"
+    cid = bob_api.accept_request(request_id)["conversation_id"]
     with pytest.raises(BackendError) as error:
-        api.conversation(cid, outsider["agent_id"])
-    assert error.value.status == 404
+        outsider_api.conversation(cid, outsider["agent_id"])
+    assert error.value.status == 401
 
 
 def test_selection_cannot_be_redirected(network):
     api, _, _ = network
+    other_api = BackendClient("http://testserver", transport=api.client._transport)
     a, b, outsider = profile("Alice"), profile("Bob"), profile("Other")
-    for item in (a, b, outsider):
-        api.register(item)
+    api.register(a)
+    other_api.register(b)
+    outsider_api = BackendClient("http://testserver", transport=api.client._transport)
+    outsider_api.register(outsider)
     graph = YlobookGraph(api, a, llm=LocalModel(outsider["agent_id"]))
     with pytest.raises(RuntimeError, match="different contact target"):
         graph.contact("hello", b["agent_id"])
-    assert api.inbox(a["agent_id"]) == []
+    assert api.inbox(a["agent_id"])["conversations"] == []
 
 
 def test_database_survives_restart(tmp_path):
     url = f"sqlite:///{tmp_path / 'persist.db'}"
     a, b = profile("Alice"), profile("Bob")
     with TestClient(create_app(url)) as server:
-        for person in (a, b):
-            assert server.post("/agents", json={"agent_id": person["agent_id"],
-                "name": person["display_name"], "interests": person["interests"]}).status_code == 200
-        cid = server.post("/requests", json={"request_id": f"request_{uuid4().hex}",
-            "from_agent_id": a["agent_id"], "to_agent_id": b["agent_id"], "purpose": "hello"}).json()["conversation_id"]
+        a_response = server.post("/agents", json={"agent_id": a["agent_id"],
+            "name": a["display_name"], "interests": a["interests"]})
+        b_response = server.post("/agents", json={"agent_id": b["agent_id"],
+            "name": b["display_name"], "interests": b["interests"]})
+        cid_response = server.post("/requests", headers={"Authorization": f"Bearer {a_response.json()['agent_token']}"},
+            json={"request_id": f"request_{uuid4().hex}", "from_agent_id": a["agent_id"],
+                  "to_agent_id": b["agent_id"], "purpose": "hello"})
+        request_id = cid_response.json()["request_id"]
+        accepted = server.post(f"/requests/{request_id}/accept",
+            headers={"Authorization": f"Bearer {b_response.json()['agent_token']}"})
+        cid = accepted.json()["conversation_id"]
         assert server.post(f"/conversations/{cid}/messages", json={
-            "from_agent_id": a["agent_id"], "content": "persist me", "expected_count": 0}).status_code == 200
+            "from_agent_id": a["agent_id"], "content": "persist me", "expected_count": 0},
+            headers={"Authorization": f"Bearer {a_response.json()['agent_token']}"}).status_code == 200
     with TestClient(create_app(url)) as server:
-        history = server.get(f"/conversations/{cid}/messages", params={"agent_id": b["agent_id"]}).json()
+        history = server.get(f"/conversations/{cid}/messages",
+            headers={"Authorization": f"Bearer {b_response.json()['agent_token']}"}).json()
         assert history["messages"][0]["content"] == "persist me"
         assert history["next_agent_id"] == b["agent_id"]

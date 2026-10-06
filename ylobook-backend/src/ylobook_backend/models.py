@@ -20,6 +20,9 @@ class Agent(Base):
     agent_id: Mapped[str] = mapped_column(String(100), primary_key=True)
     name: Mapped[str] = mapped_column(String(100))
     interests: Mapped[list[str]] = mapped_column(JSON)
+    token_hash: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ContactRequest(Base):
@@ -28,8 +31,8 @@ class ContactRequest(Base):
     from_agent_id: Mapped[str] = mapped_column(ForeignKey("agents.agent_id"))
     to_agent_id: Mapped[str] = mapped_column(ForeignKey("agents.agent_id"))
     purpose: Mapped[str] = mapped_column(Text)
-    # Demo policy: no acceptance UI. Every contact immediately opens a conversation.
-    status: Mapped[str] = mapped_column(default="accepted")
+    status: Mapped[str] = mapped_column(default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Conversation(Base):
@@ -53,6 +56,8 @@ class Message(Base):
         ForeignKey("conversations.conversation_id"), index=True,
     )
     from_agent_id: Mapped[str] = mapped_column(ForeignKey("agents.agent_id"))
+    to_agent_id: Mapped[str] = mapped_column(ForeignKey("agents.agent_id"))
     sequence: Mapped[int]
     content: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

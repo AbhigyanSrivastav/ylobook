@@ -3,12 +3,14 @@
 import threading
 
 from ylobook_agent.api import BackendError
+from ylobook_agent.policy import ReceivingPolicy
 from ylobook_agent.settings import POLL_SECONDS
 
 
 class ConversationLoop:
-    def __init__(self, api, agent, identity, emit=print):
+    def __init__(self, api, agent, identity, emit=print, policy=None):
         self.api, self.agent, self.identity, self.emit = api, agent, identity, emit
+        self.policy = policy or ReceivingPolicy()
         self.stop_event = threading.Event()
         self.seen = {}
         self.finished = set()
@@ -31,17 +33,30 @@ class ConversationLoop:
             self.emit(f"\n{speaker}:\n{message['content']}\n"
                       f"[{message['sequence']} / {conversation['max_messages']} messages]")
         self.seen[cid] = len(conversation["messages"])
-        if conversation["status"] == "complete":
+        if conversation["status"] in {"complete", "completed"}:
             self.finished.add(cid)
             self.emit("Conversation finished automatically.")
 
     def tick(self):
-        for item in self.api.inbox(self.identity["agent_id"]):
+        self.api.heartbeat(self.identity["agent_id"])
+        events = self.api.inbox(self.identity["agent_id"])
+        for request in events.get("contact_requests", []):
+            if not self.policy.allow_contact_request(request):
+                continue
+            result = self.api.accept_request(request["request_id"])
+            self.emit(f"\nIncoming contact request from {request['from_agent_id']}\n"
+                      f"Purpose: {request['purpose']}\n\nAccepted by local policy.")
+            if result.get("conversation_id"):
+                self.emit(f"Conversation started: {result['conversation_id']}")
+        for item in events.get("conversations", []):
             cid = item["conversation_id"]
             if cid in self.finished or self.stop_event.is_set():
                 continue
             conversation = self.api.conversation(cid, self.identity["agent_id"])
             self.display(conversation)
+            if any(not self.policy.allow_message(message)
+                   for message in conversation["messages"]):
+                continue
             if (conversation["status"] != "active" or
                     conversation["next_agent_id"] != self.identity["agent_id"]):
                 continue
